@@ -38,6 +38,7 @@ class ToolCostEstimate:
 
 # Default cost estimates per tool type (in USD)
 # These are rough estimates based on typical LLM token consumption
+# Base costs will be multiplied by scan mode multipliers
 TOOL_COST_ESTIMATES: dict[str, float] = {
     # Low-cost tools (simple operations, minimal tokens)
     "think": 0.0001,  # Simple thought recording
@@ -74,6 +75,16 @@ TOOL_COST_ESTIMATES: dict[str, float] = {
     "update_vulnerability_report": 0.0003,
 }
 
+# Scan mode cost multipliers
+# quick: faster, less thorough, lower token usage
+# standard: balanced approach
+# deep: comprehensive analysis, higher token usage
+SCAN_MODE_MULTIPLIERS: dict[str, float] = {
+    "quick": 0.5,      # 50% of base cost
+    "standard": 1.0,   # Base cost
+    "deep": 1.5,       # 150% of base cost
+}
+
 # Fallback default cost for unknown tools
 DEFAULT_TOOL_COST = 0.0005
 
@@ -81,11 +92,25 @@ DEFAULT_TOOL_COST = 0.0005
 class ToolCostTracker:
     """Track tool usage and estimate costs."""
 
-    def __init__(self, run_dir: Path | None = None) -> None:
+    def __init__(self, run_dir: Path | None = None, scan_mode: str = "deep") -> None:
         self._tool_costs: list[ToolCostEstimate] = []
         self._total_estimated_cost = 0.0
         self._run_dir = run_dir
         self._log_file: Path | None = None
+        self._scan_mode = scan_mode
+        self._cost_multiplier = SCAN_MODE_MULTIPLIERS.get(scan_mode, 1.0)
+        
+    def set_run_dir(self, run_dir: Path) -> None:
+        """Set the run directory for logging."""
+        self._run_dir = run_dir
+        self._log_file = run_dir / "tool_costs.jsonl"
+        
+    def set_scan_mode(self, scan_mode: str) -> None:
+        """Set the scan mode to adjust cost estimates."""
+        self._scan_mode = scan_mode
+        self._cost_multiplier = SCAN_MODE_MULTIPLIERS.get(scan_mode, 1.0)
+        logger.info("Tool cost tracker scan mode set to %s (multiplier: %.2f)", 
+                   scan_mode, self._cost_multiplier)
         
     def set_run_dir(self, run_dir: Path) -> None:
         """Set the run directory for logging."""
@@ -104,13 +129,14 @@ class ToolCostTracker:
         if custom_cost is not None:
             cost = custom_cost
         else:
-            cost = TOOL_COST_ESTIMATES.get(tool_name, DEFAULT_TOOL_COST)
+            base_cost = TOOL_COST_ESTIMATES.get(tool_name, DEFAULT_TOOL_COST)
+            cost = base_cost * self._cost_multiplier
         
         # Create estimate record
         estimate = ToolCostEstimate(
             tool_name=tool_name,
             estimated_cost_usd=cost,
-            description=f"Tool execution by {agent_name or agent_id or 'unknown'}",
+            description=f"Tool execution by {agent_name or agent_id or 'unknown'} (mode={self._scan_mode})",
         )
         
         self._tool_costs.append(estimate)
@@ -121,10 +147,11 @@ class ToolCostTracker:
             self._write_log_entry(estimate, agent_id, agent_name)
         
         logger.debug(
-            "Tool %s used (agent=%s, cost=$%.6f)",
+            "Tool %s used (agent=%s, cost=$%.6f, mode=%s)",
             tool_name,
             agent_name or agent_id,
             cost,
+            self._scan_mode,
         )
         
         return estimate
@@ -143,6 +170,8 @@ class ToolCostTracker:
                 "estimated_cost_usd": estimate.estimated_cost_usd,
                 "agent_id": agent_id,
                 "agent_name": agent_name,
+                "scan_mode": self._scan_mode,
+                "cost_multiplier": self._cost_multiplier,
             }
             with open(self._log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry) + "\n")
@@ -169,22 +198,52 @@ class ToolCostTracker:
         return {
             "total_executions": len(self._tool_costs),
             "total_estimated_cost": self.get_total_estimated_cost(),
+            "scan_mode": self._scan_mode,
+            "cost_multiplier": self._cost_multiplier,
             "by_tool": tool_costs,
+            "by_agent": self._get_cost_by_agent(),
         }
+    
+    def _get_cost_by_agent(self) -> dict[str, Any]:
+        """Get cost breakdown by agent."""
+        from collections import defaultdict
+        
+        agent_costs: dict[str, list[float]] = defaultdict(list)
+        for t in self._tool_costs:
+            # Extract agent from description or use unknown
+            agent_key = "unknown"
+            if " by " in t.description:
+                agent_part = t.description.split(" by ")[1].split(" ")[0]
+                agent_key = agent_part
+            
+            agent_costs[agent_key].append(t.estimated_cost_usd)
+        
+        result = {}
+        for agent, costs in agent_costs.items():
+            result[agent] = {
+                "count": len(costs),
+                "total_cost": round(sum(costs), 10),
+            }
+        
+        return result
     
     def to_record(self) -> dict[str, Any]:
         """Convert tracker state to a record for persistence."""
         return {
             "total_estimated_cost": self.get_total_estimated_cost(),
             "total_executions": len(self._tool_costs),
+            "scan_mode": self._scan_mode,
+            "cost_multiplier": self._cost_multiplier,
             "tool_usage": [
                 {
                     "tool_name": t.tool_name,
                     "estimated_cost_usd": t.estimated_cost_usd,
                     "timestamp": t.timestamp,
+                    "scan_mode": self._scan_mode,
                 }
                 for t in self._tool_costs
             ],
+            "summary": self.get_tool_usage_summary(),
         }
 
 
@@ -231,8 +290,8 @@ def set_global_tool_tracker(tracker: ToolCostTracker) -> None:
     _global_tool_tracker = tracker
 
 
-def init_tool_tracker(run_dir: Path) -> ToolCostTracker:
+def init_tool_tracker(run_dir: Path, scan_mode: str = "deep") -> ToolCostTracker:
     """Initialize and set the global tool tracker."""
-    tracker = ToolCostTracker(run_dir=run_dir)
+    tracker = ToolCostTracker(run_dir=run_dir, scan_mode=scan_mode)
     set_global_tool_tracker(tracker)
     return tracker
