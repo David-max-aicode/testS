@@ -75,10 +75,11 @@ async def run_strix_scan(
     teardown_logging = setup_scan_logging(run_dir)
     set_scan_id(scan_id)
 
-    # Initialize tool cost tracker for this run
+    # Initialize tool cost tracker for this run with scan mode
     from strix.report.tool_cost import init_tool_tracker
-    init_tool_tracker(run_dir)
-    logger.info("Tool cost tracker initialized for run %s", scan_id)
+    scan_mode = str(scan_config.get("scan_mode") or "deep")
+    init_tool_tracker(run_dir, scan_mode=scan_mode)
+    logger.info("Tool cost tracker initialized for run %s (scan_mode=%s)", scan_id, scan_mode)
 
     agents_path = state_dir / "agents.json"
     agents_db = state_dir / "agents.db"
