@@ -63,6 +63,8 @@ class ReportState:
             "status": "running",
             "targets_info": [],
             "llm_usage": self._build_llm_usage_record(),
+            "tool_usage": self._build_tool_usage_record(),
+            "total_cost": 0.0,
         }
         self._run_dir: Path | None = None
         self._saved_vuln_ids: set[str] = set()
@@ -343,9 +345,36 @@ class ReportState:
 
     def _sync_llm_usage_record(self) -> None:
         self.run_record["llm_usage"] = self._build_llm_usage_record()
+        # Add tool costs to run record
+        self.run_record["tool_usage"] = self._build_tool_usage_record()
+        # Add total cost (LLM + tools)
+        self.run_record["total_cost"] = self._calculate_total_cost()
 
     def _build_llm_usage_record(self) -> dict[str, Any]:
         return self._llm_usage.to_record()
+
+    def _build_tool_usage_record(self) -> dict[str, Any]:
+        """Build tool usage record from global tool tracker."""
+        from strix.report.tool_cost import get_global_tool_tracker
+        
+        tracker = get_global_tool_tracker()
+        if tracker is None:
+            return {
+                "total_estimated_cost": 0.0,
+                "total_executions": 0,
+                "by_tool": {},
+                "by_agent": {},
+            }
+        return tracker.to_record()
+
+    def _calculate_total_cost(self) -> float:
+        """Calculate total cost (LLM + tools)."""
+        from strix.report.tool_cost import get_global_tool_tracker
+        
+        llm_cost = self._llm_usage.total_cost
+        tracker = get_global_tool_tracker()
+        tool_cost = tracker.get_total_estimated_cost() if tracker else 0.0
+        return round(llm_cost + tool_cost, 10)
 
     def _hydrate_llm_usage(self, raw_usage: Any) -> None:
         self._llm_usage.hydrate(raw_usage)
