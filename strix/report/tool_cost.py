@@ -100,6 +100,10 @@ class ToolCostTracker:
         self._scan_mode = scan_mode
         self._cost_multiplier = SCAN_MODE_MULTIPLIERS.get(scan_mode, 1.0)
         
+        # Initialize log file if run_dir is provided
+        if run_dir is not None:
+            self._log_file = run_dir / "tool_costs.jsonl"
+        
     def set_run_dir(self, run_dir: Path) -> None:
         """Set the run directory for logging."""
         self._run_dir = run_dir
@@ -111,11 +115,6 @@ class ToolCostTracker:
         self._cost_multiplier = SCAN_MODE_MULTIPLIERS.get(scan_mode, 1.0)
         logger.info("Tool cost tracker scan mode set to %s (multiplier: %.2f)", 
                    scan_mode, self._cost_multiplier)
-        
-    def set_run_dir(self, run_dir: Path) -> None:
-        """Set the run directory for logging."""
-        self._run_dir = run_dir
-        self._log_file = run_dir / "tool_costs.jsonl"
         
     def record_tool_usage(
         self,
